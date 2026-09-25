@@ -6,7 +6,7 @@ A [Pi](https://pi.dev) extension that gives **text-only coding models vision**:
 - **`describe_image` tool** — the model can also explicitly delegate image analysis on demand, through **pi's official pipeline** (`ctx.modelRegistry.complete`) with configurable `maxRetries` / `maxRetryDelayMs`
 - **Official `resizeImage` auto-compression** with a configurable size cap (`maxImageBytes`)
 - **Multi-format** — PNG/JPEG/GIF/WebP/BMP natively; **HEIC/HEIF/AVIF/TIFF/SVG/ICO** via automatic conversion (bundled `heic-convert` + `sharp`, no CLI tools needed)
-- **Vision-cache paths** — every analysis persists the analyzed image to a cache directory and returns its path, so the model can keep asking questions about the same image with `describe_image`
+- **Attachment pre-conversion** — pi's native attach pipeline only accepts png/jpeg/gif/webp/bmp; HEIC/AVIF/TIFF/SVG/ICO attachments are rejected as `[Image omitted: could not be converted...]`. Our `input` hook detects unsupported formats by magic bytes (never the extension) and converts them to JPEG via the bundled `heic-convert` + `sharp` chain before pi touches them, so they reach the vision pipeline intact
 - **Clean context** — strips pi's confusing auto-injected noise for text-only models: the `(image omitted: model does not support images)` placeholder, `[Image: original WxH, displayed at WxH. Multiply coordinates by …]` dimension hints, and `[Current model does not support images…]` warnings
 - **Zero-config** — auto-discovers the first authenticated image-capable model, with automatic fallback when it becomes unavailable; all settings live in a single `vision-tool.json`
 

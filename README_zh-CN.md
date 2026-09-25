@@ -6,7 +6,7 @@
 - **`describe_image` 工具** —— 模型也可按需显式委托图片分析，走 **pi 官方管线**（`ctx.modelRegistry.complete`），`maxRetries` / `maxRetryDelayMs` 可配置
 - **官方 `resizeImage` 自动压缩**，图片大小上限 `maxImageBytes` 可配置
 - **多格式** —— PNG/JPEG/GIF/WebP/BMP 原生支持；**HEIC/HEIF/AVIF/TIFF/SVG/ICO** 经自动转码（内置 `heic-convert` + `sharp`，无需任何命令行工具）
-- **视觉缓存路径** —— 每次分析都会把分析过的图片持久化到缓存目录并返回路径，模型可继续用 `describe_image` 对同一张图深入分析
+- **附件预转码** —— pi 原生附件处理仅支持 png/jpeg/gif/webp/bmp；HEIC/AVIF/TIFF/SVG/ICO 附件会被拒绝为 `[Image omitted: could not be converted...]`。我们的 `input` 钩子通过魔术字节（不是扩展名）检测不支持的格式，经内置的 `heic-convert` + `sharp` 转码链转成 JPEG 后再交给 pi，确保图片能进入视觉流程
 - **干净上下文** —— 清除 pi 为纯文本模型自动注入的干扰文本：`(image omitted: model does not support images)` 占位符、`[Image: original WxH, displayed at WxH. Multiply coordinates by …]` 尺寸提示、`[Current model does not support images…]` 警告
 - **零配置** —— 自动发现第一个已认证的图像模型，配置失效自动回退；所有设置统一在 `vision-tool.json`
 
