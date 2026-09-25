@@ -8,7 +8,7 @@
  *
  *  - `input`:             materialize TUI-pasted / referenced image paths into
  *                         native attachments (the user message stays intact).
- *  - `context`:           describe images inside user messages, inject
+ *  - `context`:          describe images inside user messages, inject
  *                         <image-analysis> + cached image path, and strip raw
  *                         `type: "image"` blocks to prevent pi-ai's
  *                         "(image omitted...)" placeholders from appearing.
@@ -17,6 +17,11 @@
  *                         "Image: original WxH...", "model does not support images"
  *                         and conversion warnings, inject <image-analysis> +
  *                         cached image path.
+ *
+ * Analysis results are cached per-image-hash for the session lifetime:
+ * historical messages with images hit the cache instantly (no vision API
+ * call, no delay), only genuinely new images trigger a vision call. Failed
+ * analyses are NOT cached, so they retry on the next context event.
  *
  * Only runs when the active model has no `image` input modality. Multimodal
  * models are never intercepted. Analysis crosses pi's official pipeline.
@@ -77,7 +82,6 @@ function userMessageText(msg: { content: unknown[] }): string {
  */
 function cleanImageTextNotes(text: string): string {
   return text
-    // CLI file attachments wrap the note as: <file name="...">[Image: ...]</file>
     .replace(/<file name="[^"]*">\s*\[Image: original \d+x\d+[^<]*\]\s*<\/file>\n?/g, "")
     .replace(/\n?\[Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+(?:\.\d+)? to map to original image\.\]/g, "")
     .replace(/\n?\[Current model does not support images\..*?\]/g, "")
@@ -104,10 +108,36 @@ function toolAnalysisPrompt(toolName: string, input: Record<string, unknown> | u
 
 export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): void {
   const dbg = (m: string) => deps.debugLog?.(m);
-  let activePromptKey: string | undefined;
-  let activeAnalysis:
-    | { key: string; result?: Map<string, string>; pending?: Promise<Map<string, string>>; completed?: boolean }
-    | undefined;
+
+  /**
+   * Session-lifetime cache: imageHash -> analysis block string.
+   * - Hit: no vision API call, instant.
+   * - Miss: analyze, cache on success only.
+   * - Failure: NOT cached, so the next context event retries.
+   */
+  const analysisCache = new Map<string, string>();
+
+  /**
+   * Many API gateways silently drop requests with bodies > ~1MB.
+   */
+  async function analyzeOneImage(
+    img: ImageContent,
+    hash: string,
+    question: string,
+    ctx: ExtensionContext,
+  ): Promise<string | undefined> {
+    const cfg = deps.getConfig();
+    const model = findConfiguredModel(ctx, cfg.provider, cfg.model);
+    if (!model) return undefined;
+    const loaded = await loadImageFromContent(img, cfg);
+    dbg(`  [${hash.slice(0, 8)}] loaded, mime=${loaded.mimeType} base64Len=${loaded.data.length} cached=${loaded.cachePath}`);
+    const answer = await describeWithPipeline(ctx, model, cfg, loaded, question, ctx.signal);
+    return buildAnalysisContext({
+      text: answer.text,
+      cachePath: answer.cachePath ?? loaded.cachePath,
+      note: loaded.note ?? answer.note,
+    });
+  }
 
   async function analyzeImages(
     images: ImageContent[],
@@ -115,147 +145,114 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
     ctx: ExtensionContext,
   ): Promise<Map<string, string>> {
     const cfg = deps.getConfig();
-    const model = findConfiguredModel(ctx, cfg.provider, cfg.model);
-    if (!model) {
-      dbg(`analyzeImages: vision model ${cfg.provider}/${cfg.model} NOT FOUND, returning empty`);
-      return new Map();
-    }
-    dbg(`analyzeImages: start ${images.length} image(s) with ${model.provider}/${model.id}, question=${question.slice(0,80).replace(/\n/g," ")}`);
     const out = new Map<string, string>();
     for (const img of images) {
+      const hash = imageHash(img.data, img.mimeType);
+
+      // Cache hit: instant, no API call
+      const cached = analysisCache.get(hash);
+      if (cached !== undefined) {
+        out.set(hash, cached);
+        continue;
+      }
+
+      // Cache miss: analyze
       try {
-        const loaded = await loadImageFromContent(img, cfg);
-        dbg(`  image[${imageHash(img.data, img.mimeType).slice(0, 8)}] loaded, mimeType=${loaded.mimeType} cached=${loaded.cachePath} dataLen=${loaded.data.length}`);
-        const answer = await describeWithPipeline(ctx, model, cfg, loaded, question, ctx.signal);
-        dbg(`  image[..] answered, textLen=${answer.text.length}`);
-        // Key by the ORIGINAL ImageContent hash — the lookup side (context /
-        // tool_result) iterates the original content parts and must find the
-        // block even when conversion/resize changed the sent bytes (HEIC→JPEG
-        // or an oversized image).
-        out.set(
-          imageHash(img.data, img.mimeType),
-          buildAnalysisContext({ text: answer.text, cachePath: answer.cachePath ?? loaded.cachePath, note: loaded.note ?? answer.note }),
-        );
-        deps.onCall?.(true);
+        const block = await analyzeOneImage(img, hash, question, ctx);
+        if (block) {
+          analysisCache.set(hash, block);
+          out.set(hash, block);
+          deps.onCall?.(true);
+        }
       } catch (e) {
-        dbg(`  image[...] FAILED: ${e instanceof Error ? e.message : String(e)}`);
+        // NOT cached — will retry on next context event
+        const msg = e instanceof Error ? e.message : String(e);
+        const kb = Math.round(img.data.length / 1024);
+        dbg(`  [${hash.slice(0, 8)}] FAILED (${kb}KB): ${msg}`);
+        if (img.data.length > 400 * 1024) {
+          dbg(`  [${hash.slice(0, 8)}] hint: image is large (${kb}KB); the vision gateway may reject bodies > ~512KB. Consider lowering maxImageBytes in vision-tool.json (currently ${cfg ? Math.round(cfg.maxImageBytes / 1024) : "?"}KB) — this is informational, no auto-retry.`);
+        }
         deps.onCall?.(false);
       }
     }
-    dbg(`analyzeImages: done, ${out.size}/${images.length} succeeded`);
+    dbg(`analyzeImages: ${out.size}/${images.length} ok (cache size=${analysisCache.size})`);
     return out;
   }
 
   pi.on("before_agent_start", (event) => {
-    const h = createHash("sha256");
-    h.update(event.prompt ?? "");
-    for (const img of event.images ?? []) {
-      h.update("\0");
-      h.update(img.mimeType);
-      h.update(img.data);
-    }
-    activePromptKey = h.digest("hex");
-    activeAnalysis = undefined;
-    dbg(`before_agent_start: promptLen=${(event.prompt ?? "").length} images=${(event.images ?? []).length} key=${activePromptKey.slice(0, 12)}`);
+    dbg(`before_agent_start: images=${(event.images ?? []).length}`);
   });
 
   pi.on("agent_settled", () => {
-    dbg("agent_settled: cleared prompt key");
-    activePromptKey = undefined;
-    activeAnalysis = undefined;
+    dbg(`agent_settled (cache retains ${analysisCache.size} entries for next turn)`);
   });
 
   // --- 1. TUI paste / referenced image paths -> native attachments ----------
   pi.on("input", async (event, ctx) => {
-    if (!ctx.model) { dbg("input: no model, exit"); return; }
+    if (!ctx.model) { dbg("input: no model"); return; }
     const input = (ctx.model.input ?? ["text"]) as string[];
-    if (input.includes("image")) { dbg("input: multimodal, passthrough"); return; }
+    if (input.includes("image")) { dbg("input: multimodal"); return; }
     const cfg = deps.getConfig();
-    if (!cfg.enabled || !cfg.autoIntercept) { dbg("input: disabled, exit"); return; }
+    if (!cfg.enabled || !cfg.autoIntercept) { dbg("input: disabled"); return; }
     dbg(`input: textLen=${event.text.length} nativeImages=${(event.images ?? []).length}`);
     let images = [...(event.images ?? [])];
     const { paths } = extractInputImagePaths(event.text);
-    if (paths.length > 0) dbg(`input: extracted ${paths.length} path(s): ${paths.join(", ").slice(0, 200)}`);
     for (const p of paths) {
       try {
         const loaded = await loadImageFromFile(p, cfg);
         images.push({ type: "image", data: loaded.data, mimeType: loaded.mimeType });
-        dbg(`input: materialized ${p} -> ${loaded.mimeType} ${loaded.data.length}b cached=${loaded.cachePath}`);
+        dbg(`input: materialized ${p}`);
       } catch {
-        dbg(`input: path ${p} not readable, skipped`);
+        // not a readable image -> leave text untouched
       }
     }
     const cleanedText = cleanImageTextNotes(event.text);
-    if (images.length === 0 && cleanedText === event.text.trim()) { dbg("input: nothing to transform"); return; }
-    dbg(`input: transform, ${images.length} image(s), textChanged=${cleanedText !== event.text}`);
+    if (images.length === 0 && cleanedText === event.text.trim()) return;
     return { action: "transform", text: cleanedText || event.text, images } as never;
   });
 
   // --- 2. user messages -> inject analysis and strip image blocks ------------
   pi.on("context", async (event, ctx): Promise<ContextTransform | undefined> => {
-    if (!ctx.model) { dbg("context: no model, exit"); return undefined; }
+    if (!ctx.model) { dbg("context: no model"); return undefined; }
     const input = (ctx.model.input ?? ["text"]) as string[];
-    if (input.includes("image")) { dbg("context: multimodal, exit"); return undefined; }
+    if (input.includes("image")) { dbg("context: multimodal"); return undefined; }
     const cfg = deps.getConfig();
-    if (!cfg.enabled || !cfg.autoIntercept) { dbg("context: disabled, exit"); return undefined; }
-    const key = activePromptKey;
-    if (!key) { dbg("context: NO activePromptKey (before_agent_start didn't fire?), exit"); return undefined; }
-    dbg(`context: messages=${event.messages.length} key=${key.slice(0, 12)}`);
+    if (!cfg.enabled || !cfg.autoIntercept) { dbg("context: disabled"); return undefined; }
+    dbg(`context: messages=${event.messages.length}`);
 
     const messages: ContextEvent["messages"] = [];
     let changed = false;
     for (const msg of event.messages) {
-      if (!isUserMessage(msg)) {
-        messages.push(msg);
-        continue;
-      }
+      if (!isUserMessage(msg)) { messages.push(msg); continue; }
       const images = userMessageImages(msg);
-      if (images.length === 0) {
-        messages.push(msg);
-        continue;
-      }
-      dbg(`context: user msg has ${images.length} image(s), textLen=${userMessageText(msg).length}`);
-      const prompt = userMessageText(msg);
-      if (!activeAnalysis || activeAnalysis.key !== key) {
-        activeAnalysis = { key, pending: undefined as never };
-      }
-      let textMap: Map<string, string> | undefined;
-      if (activeAnalysis.key === key && activeAnalysis.result) {
-        textMap = activeAnalysis.result;
-      } else if (activeAnalysis.key === key && activeAnalysis.pending) {
-        textMap = await activeAnalysis.pending;
-      } else {
-        const pending = analyzeImages(images, prompt || "Describe the attached image(s) in detail.", ctx);
-        activeAnalysis.pending = pending as never;
-        textMap = await pending;
-        activeAnalysis.result = textMap;
-        delete (activeAnalysis as { pending?: unknown }).pending;
-      }
+      if (images.length === 0) { messages.push(msg); continue; }
+      dbg(`context: user msg has ${images.length} image(s)`);
 
+      // analyzeImages consults the per-image cache: historical images are
+      // instant, only genuinely new images hit the vision API.
+      const textMap = await analyzeImages(images, userMessageText(msg), ctx);
       const blocks = images
-        .map((img) => textMap?.get(imageHash(img.data, img.mimeType)))
+        .map((img) => textMap.get(imageHash(img.data, img.mimeType)))
         .filter((b): b is string => Boolean(b));
 
       if (blocks.length === 0) {
-        dbg(`context: blocks EMPTY for ${images.length} image(s) (analysis failed) — keeping original msg with image blocks`);
+        dbg(`context: blocks EMPTY for ${images.length} image(s) — keeping original`);
         messages.push(msg);
         continue;
       }
-      dbg(`context: injected ${blocks.length} analysis block(s), stripping ${images.length} image block(s)`);
+      dbg(`context: injected ${blocks.length}/${images.length} block(s)`);
       changed = true;
 
-      // Filter out `type: "image"` blocks from the user message sent to the provider.
-      // This prevents pi-ai's `downgradeUnsupportedImages` from inserting
-      // "(image omitted: model does not support images)" placeholders!
-      // The TUI transcript retains the original message and still renders images normally.
-      const nonImageParts = (msg.content as Array<{ type: string; text?: string; [k: string]: unknown }>).filter(
-        (part) => part.type !== "image"
-      ).map((part) => {
-        if (part.type === "text" && typeof part.text === "string") {
-          return { ...part, text: cleanImageTextNotes(part.text) };
-        }
-        return part;
-      });
+      // Strip image blocks so pi-ai's downgradeUnsupportedImages never inserts
+      // "(image omitted...)". TUI transcript retains originals.
+      const nonImageParts = (msg.content as Array<{ type: string; text?: string; [k: string]: unknown }>)
+        .filter((part) => part.type !== "image")
+        .map((part) => {
+          if (part.type === "text" && typeof part.text === "string") {
+            return { ...part, text: cleanImageTextNotes(part.text) };
+          }
+          return part;
+        });
 
       messages.push({
         ...msg,
@@ -270,18 +267,17 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
 
   // --- 3. tool results -> inject analysis and clean notes --------------------
   pi.on("tool_result", async (event: ToolResultEvent, ctx) => {
-    if (!ctx.model) { dbg("tool_result: no model, exit"); return undefined; }
+    if (!ctx.model) return undefined;
     const input = (ctx.model.input ?? ["text"]) as string[];
-    if (input.includes("image")) { dbg("tool_result: multimodal, exit"); return undefined; }
+    if (input.includes("image")) return undefined;
     const cfg = deps.getConfig();
-    if (!cfg.enabled || !cfg.autoIntercept) { dbg("tool_result: disabled, exit"); return undefined; }
-    if (event.isError) { dbg("tool_result: isError, exit"); return undefined; }
+    if (!cfg.enabled || !cfg.autoIntercept) return undefined;
+    if (event.isError) return undefined;
 
     const images = (event.content ?? []).filter(
       (p): p is ImageContent => typeof p === "object" && p !== null && (p as { type?: string }).type === "image",
     );
-    if (images.length === 0) { dbg("tool_result: no images, exit"); return undefined; }
-    dbg(`tool_result: ${event.toolName} has ${images.length} image(s)`);
+    if (images.length === 0) return undefined;
 
     const question = toolAnalysisPrompt(event.toolName ?? "", (event.input ?? {}) as Record<string, unknown>);
     const texts = await analyzeImages(images, question, ctx);
@@ -291,8 +287,6 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
       .map((img) => texts.get(imageHash(img.data, img.mimeType)))
       .filter((b): b is string => Boolean(b));
 
-    // Strip image blocks from the tool_result content sent to the non-vision provider
-    // and clean up dimension notes/warnings in text parts.
     const content = (event.content ?? [])
       .filter((part) => (part as { type?: string }).type !== "image")
       .map((part) => {
