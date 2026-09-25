@@ -7,6 +7,7 @@ A [Pi](https://pi.dev) extension that gives **text-only coding models vision**:
 - **Official `resizeImage` auto-compression** with a configurable size cap (`maxImageBytes`)
 - **Multi-format** — PNG/JPEG/GIF/WebP/BMP natively; **HEIC/HEIF/AVIF/TIFF/SVG/ICO** via automatic conversion (bundled `heic-convert` + `sharp`, no CLI tools needed)
 - **Vision-cache paths** — every analysis persists the analyzed image to a cache directory and returns its path, so the model can keep asking questions about the same image with `describe_image`
+- **Clean context** — strips pi's confusing auto-injected noise for text-only models: the `(image omitted: model does not support images)` placeholder, `[Image: original WxH, displayed at WxH. Multiply coordinates by …]` dimension hints, and `[Current model does not support images…]` warnings
 - **Zero-config** — auto-discovers the first authenticated image-capable model, with automatic fallback when it becomes unavailable; all settings live in a single `vision-tool.json`
 
 ## How it works
@@ -132,6 +133,8 @@ The main model can therefore keep working on the same image with `describe_image
 - The user's original message is never rewritten; analysis is only prepended to the transient provider-bound context, and original image blocks are kept so the TUI still renders them.
 - Oversized images are compressed with pi's official `resizeImage` to `maxImageBytes` before being sent.
 - Multiple images in one message are described sequentially to avoid bursting the vision provider.
+- For text-only models the extension removes raw image blocks from the provider-bound context (after describing them). This stops pi-ai's `downgradeUnsupportedImages()` from injecting `(image omitted: model does not support images)` — the placeholder is only emitted when an image block reaches the provider. The TUI transcript keeps the original messages, so images still render normally; multimodal models are never touched.
+- System-generated image notes (`[Image: original …]`, `[Current model does not support images…]`, `[Image converted from …]`) are cleaned from user text and tool results so they never confuse the model.
 
 ## License
 

@@ -7,6 +7,7 @@
 - **官方 `resizeImage` 自动压缩**，图片大小上限 `maxImageBytes` 可配置
 - **多格式** —— PNG/JPEG/GIF/WebP/BMP 原生支持；**HEIC/HEIF/AVIF/TIFF/SVG/ICO** 经自动转码（内置 `heic-convert` + `sharp`，无需任何命令行工具）
 - **视觉缓存路径** —— 每次分析都会把分析过的图片持久化到缓存目录并返回路径，模型可继续用 `describe_image` 对同一张图深入分析
+- **干净上下文** —— 清除 pi 为纯文本模型自动注入的干扰文本：`(image omitted: model does not support images)` 占位符、`[Image: original WxH, displayed at WxH. Multiply coordinates by …]` 尺寸提示、`[Current model does not support images…]` 警告
 - **零配置** —— 自动发现第一个已认证的图像模型，配置失效自动回退；所有设置统一在 `vision-tool.json`
 
 ## 工作原理
@@ -130,6 +131,8 @@ cached-at: /tmp/pi-vision-tool-cache/k9x2f81a.png
 - 用户原始消息永不改写；分析只注入发送给模型的瞬态上下文，原始图片块保留（TUI 照常显示）
 - 超大图片先用 pi 官方 `resizeImage` 压到 `maxImageBytes` 再发送
 - 单条消息多图按顺序逐张描述，避免并发冲击视觉模型
+- 对纯文本模型，扩展在描述后会**从送往 provider 的上下文中移除原始 image 块**，从而阻止 pi-ai 的 `downgradeUnsupportedImages()` 插入 `(image omitted: model does not support images)` 占位符——该占位符仅在 image 块抵达 provider 时才产生。TUI 会话历史保留原始消息，图片照常渲染；多模态模型完全不受影响
+- 系统生成的图片提示（`[Image: original …]`、`[Current model does not support images…]`、`[Image converted from …]`）会从用户文本与工具结果中清除，不再干扰模型
 
 ## 许可
 

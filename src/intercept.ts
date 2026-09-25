@@ -9,11 +9,14 @@
  *  - `input`:             materialize TUI-pasted / referenced image paths into
  *                         native attachments (the user message stays intact).
  *  - `context`:           describe images inside user messages, inject
- *                         <image-analysis> + cached image path.
+ *                         <image-analysis> + cached image path, and strip raw
+ *                         `type: "image"` blocks to prevent pi-ai's
+ *                         "(image omitted...)" placeholders from appearing.
  *  - `tool_result`:       describe images returned by tools (read on an image,
  *                         browser screenshots, image_generate output...), strip
- *                         "model does not support images" warnings, inject
- *                         <image-analysis> + cached image path.
+ *                         "Image: original WxH...", "model does not support images"
+ *                         and conversion warnings, inject <image-analysis> +
+ *                         cached image path.
  *
  * Only runs when the active model has no `image` input modality. Multimodal
  * models are never intercepted. Analysis crosses pi's official pipeline.
@@ -64,6 +67,24 @@ function userMessageText(msg: { content: unknown[] }): string {
     .join("\n");
 }
 
+/**
+ * Strip system-generated image warnings/dimension hints that are confusing to LLMs.
+ * Removes:
+ *   - [Image: original WxH, displayed at WxH. Multiply coordinates by...]
+ *   - [Current model does not support images...]
+ *   - [Image converted from X to Y.]
+ */
+function cleanImageTextNotes(text: string): string {
+  return text
+    // CLI file attachments wrap the note as: <file name="...">[Image: ...]</file>
+    .replace(/<file name="[^"]*">\s*\[Image: original \d+x\d+[^<]*\]\s*<\/file>\n?/g, "")
+    .replace(/\n?\[Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+(?:\.\d+)? to map to original image\.\]/g, "")
+    .replace(/\n?\[Current model does not support images\..*?\]/g, "")
+    .replace(/\n?\[Image converted from .*? to .*?\.\]/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function toolAnalysisPrompt(toolName: string, input: Record<string, unknown> | undefined): string {
   const rawPath =
     typeof input?.path === "string"
@@ -102,8 +123,7 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
         // Key by the ORIGINAL ImageContent hash — the lookup side (context /
         // tool_result) iterates the original content parts and must find the
         // block even when conversion/resize changed the sent bytes (HEIC→JPEG
-        // or an oversized image). The cache path inside the block refers to
-        // the exact bytes that were analyzed.
+        // or an oversized image).
         out.set(
           imageHash(img.data, img.mimeType),
           buildAnalysisContext({ text: answer.text, cachePath: answer.cachePath ?? loaded.cachePath, note: loaded.note ?? answer.note }),
@@ -111,7 +131,6 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
         deps.onCall?.(true);
       } catch {
         deps.onCall?.(false);
-        // keep the image block; the parent model still sees the raw attachment
       }
     }
     return out;
@@ -151,11 +170,12 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
         // not a readable image -> leave the text untouched
       }
     }
-    if (images.length === 0) return;
-    return { action: "transform", text: event.text, images } as never;
+    const cleanedText = cleanImageTextNotes(event.text);
+    if (images.length === 0 && cleanedText === event.text.trim()) return;
+    return { action: "transform", text: cleanedText || event.text, images } as never;
   });
 
-  // --- 2. user messages -> inject analysis --------------------------------
+  // --- 2. user messages -> inject analysis and strip image blocks ------------
   pi.on("context", async (event, ctx): Promise<ContextTransform | undefined> => {
     if (!ctx.model) return undefined;
     const input = (ctx.model.input ?? ["text"]) as string[];
@@ -178,42 +198,58 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
         continue;
       }
       const prompt = userMessageText(msg);
-      const imgKey = prompt + "\0" + images.map((i) => imageHash(i.data, i.mimeType)).join(",");
       if (!activeAnalysis || activeAnalysis.key !== key) {
         activeAnalysis = { key, pending: undefined as never };
       }
-      let text: Map<string, string> | undefined;
+      let textMap: Map<string, string> | undefined;
       if (activeAnalysis.key === key && activeAnalysis.result) {
-        text = activeAnalysis.result;
+        textMap = activeAnalysis.result;
       } else if (activeAnalysis.key === key && activeAnalysis.pending) {
-        text = await activeAnalysis.pending;
+        textMap = await activeAnalysis.pending;
       } else {
         const pending = analyzeImages(images, prompt || "Describe the attached image(s) in detail.", ctx);
         activeAnalysis.pending = pending as never;
-        text = await pending;
-        activeAnalysis.result = text;
+        textMap = await pending;
+        activeAnalysis.result = textMap;
         delete (activeAnalysis as { pending?: unknown }).pending;
       }
+
       const blocks = images
-        .map((img) => text?.get(imageHash(img.data, img.mimeType)))
+        .map((img) => textMap?.get(imageHash(img.data, img.mimeType)))
         .filter((b): b is string => Boolean(b));
+
       if (blocks.length === 0) {
         messages.push(msg);
         continue;
       }
+
       changed = true;
+
+      // Filter out `type: "image"` blocks from the user message sent to the provider.
+      // This prevents pi-ai's `downgradeUnsupportedImages` from inserting
+      // "(image omitted: model does not support images)" placeholders!
+      // The TUI transcript retains the original message and still renders images normally.
+      const nonImageParts = (msg.content as Array<{ type: string; text?: string; [k: string]: unknown }>).filter(
+        (part) => part.type !== "image"
+      ).map((part) => {
+        if (part.type === "text" && typeof part.text === "string") {
+          return { ...part, text: cleanImageTextNotes(part.text) };
+        }
+        return part;
+      });
+
       messages.push({
         ...msg,
         content: [
           { type: "text" as const, text: blocks.join("\n\n") },
-          ...(msg.content as Array<{ type: string; [k: string]: unknown }>),
+          ...nonImageParts,
         ],
       });
     }
     return changed ? { messages } : undefined;
   });
 
-  // --- 3. tool results -> inject analysis ----------------------------------
+  // --- 3. tool results -> inject analysis and clean notes --------------------
   pi.on("tool_result", async (event: ToolResultEvent, ctx) => {
     if (!ctx.model) return undefined;
     const input = (ctx.model.input ?? ["text"]) as string[];
@@ -235,18 +271,21 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
       .map((img) => texts.get(imageHash(img.data, img.mimeType)))
       .filter((b): b is string => Boolean(b));
 
-    const content = (event.content ?? []).map((part) => {
-      if ((part as { type?: string }).type === "text") {
-        const cleaned = (part as { text: string }).text
-          .replace(/\n?\[Current model does not support images\..*?\]/g, "")
-          .trim();
-        return {
-          type: "text" as const,
-          text: cleaned ? `${cleaned}\n\n${blocks.join("\n\n")}` : blocks.join("\n\n"),
-        };
-      }
-      return part;
-    });
+    // Strip image blocks from the tool_result content sent to the non-vision provider
+    // and clean up dimension notes/warnings in text parts.
+    const content = (event.content ?? [])
+      .filter((part) => (part as { type?: string }).type !== "image")
+      .map((part) => {
+        if ((part as { type?: string }).type === "text") {
+          const cleaned = cleanImageTextNotes((part as { text: string }).text);
+          return {
+            type: "text" as const,
+            text: cleaned ? `${cleaned}\n\n${blocks.join("\n\n")}` : blocks.join("\n\n"),
+          };
+        }
+        return part;
+      });
+
     if (!content.some((p) => (p as { type?: string }).type === "text")) {
       content.unshift({ type: "text", text: blocks.join("\n\n") });
     }
