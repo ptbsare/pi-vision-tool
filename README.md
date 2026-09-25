@@ -69,7 +69,7 @@ On first session start, the extension picks the **first available (authenticated
   "timeoutSeconds": 120,            // per-call vision timeout in seconds (0 = no limit)
   "maxImageBytes": 10485760,        // images above this are auto-resized (official resizeImage)
   "cacheDir": "/tmp/pi-vision-tool-cache", // where analyzed images are persisted
-  "cacheTtlHours": 24,              // cache entry TTL (0 = never prune)
+  "cacheTtlHours": 24,              // TTL for BOTH image files and analysis cache entries (0 = never prune)
   "autoIntercept": true,            // transparent bridging on/off
   "showInFooter": true,              // TUI footer indicator
   "debug": false,                   // print runtime diagnostics to stderr (journal)

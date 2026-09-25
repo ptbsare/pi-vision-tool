@@ -31,7 +31,7 @@ import { findConfiguredModel, findFirstVisionModel, listVisionModels, modelRef }
 import { registerInterceptors } from "./src/intercept";
 import { registerDescribeTool } from "./src/tool";
 import { describeWithPipeline } from "./src/vision";
-import { loadImageFromFile, cacheStats, clearCache, formatBytes } from "./src/images";
+import { loadImageFromFile, cacheStats, clearCache, formatBytes, loadAnalysisCache } from "./src/images";
 import { generateTestImage } from "./src/test-image";
 // SPDX-License-Identifier: GPL-3.0-or-later
 // pi-vision-tool — see LICENSE for the full GPLv3 text.
@@ -64,6 +64,10 @@ const __dbg = (m: string) => process.stderr.write(`[pi-vision-tool][debug] ${m}\
 
 export default function visionToolExtension(pi: ExtensionAPI): void {
   let cfg = loadConfig();
+  // Shared analysis cache — persisted to cacheDir/analysis-cache.json, loaded
+  // once at startup so results survive pi-web restarts, and cleared together
+  // with /vision cache clear.
+  const sharedAnalysisCache = loadAnalysisCache(cfg);
   let footerVisible = false;
   let toolRegistered = false;
 
@@ -164,6 +168,7 @@ export default function visionToolExtension(pi: ExtensionAPI): void {
     debugLog: (msg) => {
       if (getConfig().debug) process.stderr.write(`[pi-vision-tool] ${msg}\n`);
     },
+    analysisCache: sharedAnalysisCache,
   });
 
   pi.on("session_start", async (_event, ctx) => {
@@ -269,7 +274,7 @@ export default function visionToolExtension(pi: ExtensionAPI): void {
           const raw = parts.slice(2).join(" ");
           if (!key) {
             ctx.ui.notify(
-              `Configurable keys: maxOutputTokens, maxRetries, maxRetryDelayMs, timeoutSeconds (per-call vision timeout in s, 0 = no limit), maxImageBytes, cacheDir, cacheTtlHours, showInFooter (true|false), debug (true|false), convertFormats (comma list)`,
+              `Configurable keys: maxOutputTokens, maxRetries, maxRetryDelayMs, timeoutSeconds (per-call vision timeout in s, 0 = no limit), maxImageBytes, cacheDir, cacheTtlHours (TTL for both image files and analysis cache, 0 = never prune), showInFooter (true|false), debug (true|false), convertFormats (comma list)`,
               "info",
             );
             return;
@@ -355,7 +360,8 @@ export default function visionToolExtension(pi: ExtensionAPI): void {
         case "cache": {
           if (parts[1] === "clear") {
             const n = await clearCache(cfg.cacheDir);
-            ctx.ui.notify(`Removed ${n} cache file(s) from ${cfg.cacheDir}.`, "info");
+            sharedAnalysisCache.clear();
+            ctx.ui.notify(`Removed ${n} cache file(s) from ${cfg.cacheDir} (incl. analysis cache).`, "info");
             return;
           }
           const st = await cacheStats(cfg.cacheDir);

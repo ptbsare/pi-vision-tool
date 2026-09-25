@@ -68,7 +68,7 @@ pi -e git:github.com/ptbsare/pi-vision-tool
   "timeoutSeconds": 120,            // 单次识别超时（秒），0 = 不限制
   "maxImageBytes": 10485760,        // 超过此大小自动压缩（官方 resizeImage）
   "cacheDir": "/tmp/pi-vision-tool-cache", // 分析图片的持久化缓存目录
-  "cacheTtlHours": 24,              // 缓存 TTL（0 = 永不清理）
+  "cacheTtlHours": 24,              // 图片文件和分析缓存统一 TTL（0 = 永不清理）
   "autoIntercept": true,            // 透明桥接开关
   "showInFooter": true,              // TUI 底栏指示器
   "debug": false,                   // 向 stderr 打印运行诊断（进 journal）

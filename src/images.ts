@@ -20,6 +20,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, writeFile, mkdir, readdir, stat, rm } from "node:fs/promises";
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { extname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
@@ -189,7 +190,13 @@ async function normalizeBuffer(
 async function persistCache(data: string, mimeType: string, cfg: VisionToolConfig): Promise<string> {
   await mkdir(cfg.cacheDir, { recursive: true });
   const ext = mimeToExt(mimeType);
-  const file = join(cfg.cacheDir, `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}.${ext}`);
+  // Content-hash file name: the same image always maps to the same path,
+  // stable across restarts (used by the persisted analysis cache).
+  const h = createHash("sha256");
+  h.update(mimeType);
+  h.update("\0");
+  h.update(data);
+  const file = join(cfg.cacheDir, `${h.digest("hex").slice(0, 24)}.${ext}`);
   await writeFile(file, Buffer.from(data, "base64"));
   if (cfg.cacheTtlHours > 0) await pruneCache(cfg.cacheDir, cfg.cacheTtlHours);
   return file;
@@ -226,6 +233,54 @@ export async function loadImageFromContent(
 /** Load an already-normalized base64 image (skip sniff/convert) and cache it. */
 export async function cacheNormalizedImage(data: string, mimeType: string, cfg: VisionToolConfig): Promise<string> {
   return persistCache(data, mimeType, cfg);
+}
+
+// ---------------------------------------------------------------------------
+// Persisted analysis cache: survives restarts so already-analyzed images are
+// not re-sent to the vision API. Stored as JSON under the image cache dir.
+// ---------------------------------------------------------------------------
+export interface AnalysisCacheEntry {
+  /** The rendered <image-analysis> block. */
+  text: string;
+  /** Epoch ms when the analysis was written. */
+  ts: number;
+}
+
+export function analysisCachePath(cfg: VisionToolConfig): string {
+  return join(cfg.cacheDir, "analysis-cache.json");
+}
+
+export function loadAnalysisCache(cfg: VisionToolConfig): Map<string, string> {
+  try {
+    const raw = JSON.parse(readFileSync(analysisCachePath(cfg), "utf-8")) as Record<string, AnalysisCacheEntry>;
+    const now = Date.now();
+    // Shared TTL with the image cache files: cacheTtlHours (0 = never prune)
+    const ttlMs = cfg.cacheTtlHours > 0 ? cfg.cacheTtlHours * 3600_000 : Number.POSITIVE_INFINITY;
+    const map = new Map<string, string>();
+    for (const [k, v] of Object.entries(raw)) {
+      if (v && typeof v.text === "string" && now - v.ts < ttlMs) {
+        map.set(k, v.text);
+      }
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+export function saveAnalysisCache(cfg: VisionToolConfig, entries: Map<string, string>): void {
+  try {
+    const now = Date.now();
+    const obj: Record<string, AnalysisCacheEntry> = {};
+    for (const [k, text] of entries) obj[k] = { text, ts: now };
+    mkdirSync(cfg.cacheDir, { recursive: true });
+    // Atomic-ish: write temp then rename to avoid a torn file on crash.
+    const tmp = `${analysisCachePath(cfg)}.tmp`;
+    writeFileSync(tmp, JSON.stringify(obj));
+    renameSync(tmp, analysisCachePath(cfg));
+  } catch {
+    // cache is best-effort
+  }
 }
 
 export function imageHash(data: string, mimeType: string): string {
@@ -266,6 +321,7 @@ export async function cacheStats(dir: string): Promise<CacheStats> {
 
 export async function pruneCache(dir: string, ttlHours: number): Promise<void> {
   if (ttlHours <= 0) return;
+  const SKIP = "analysis-cache.json";
   const ttlMs = ttlHours * 3600_000;
   const now = Date.now();
   try {
@@ -273,6 +329,7 @@ export async function pruneCache(dir: string, ttlHours: number): Promise<void> {
     for (const name of names) {
       try {
         const p = join(dir, name);
+        if (name === SKIP) continue;
         const st = await stat(p);
         if (st.isFile() && now - st.mtimeMs > ttlMs) await rm(p, { force: true });
       } catch {

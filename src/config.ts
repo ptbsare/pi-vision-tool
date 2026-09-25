@@ -41,7 +41,7 @@ export interface VisionToolConfig {
    * different question. Default: `<os tmpdir>/pi-vision-tool-cache`.
    */
   cacheDir: string;
-  /** Cache file TTL in hours (0 = never prune). */
+  /** Cache TTL in hours for both image files and analysis entries (0 = never prune). */
   cacheTtlHours: number;
   /** Automatically describe images in user messages and tool results. */
   autoIntercept: boolean;

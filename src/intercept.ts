@@ -34,7 +34,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { createHash } from "node:crypto";
-import { loadImageFromContent, loadImageFromFile, imageHash, needsConversion } from "./images";
+import { loadImageFromContent, loadImageFromFile, imageHash, needsConversion, loadAnalysisCache, saveAnalysisCache } from "./images";
 import { describeWithPipeline, buildAnalysisContext } from "./vision";
 import { findConfiguredModel, modelRef } from "./discovery";
 import { extractInputImagePaths } from "./input-images";
@@ -44,6 +44,9 @@ interface InterceptDeps {
   getConfig: () => VisionToolConfig;
   onCall?: (ok: boolean) => void;
   debugLog?: (msg: string) => void;
+  /** Shared analysis cache (persisted to cacheDir/analysis-cache.json).
+   *  Provided by index.ts so /vision cache clear can wipe it too. */
+  analysisCache?: Map<string, string>;
 }
 
 type ContextTransform = { messages: ContextEvent["messages"] };
@@ -114,7 +117,7 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
    * - Miss: analyze, cache on success only.
    * - Failure: NOT cached, so the next context event retries.
    */
-  const analysisCache = new Map<string, string>();
+  const analysisCache = deps.analysisCache ?? loadAnalysisCache(deps.getConfig());
 
   /**
    * Many API gateways silently drop requests with bodies > ~1MB.
@@ -160,6 +163,7 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
         const block = await analyzeOneImage(img, hash, question, ctx);
         if (block) {
           analysisCache.set(hash, block);
+          saveAnalysisCache(deps.getConfig(), analysisCache);
           out.set(hash, block);
           deps.onCall?.(true);
         }
