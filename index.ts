@@ -167,7 +167,7 @@ export default function visionToolExtension(pi: ExtensionAPI): void {
         "  /vision list            list image-capable models",
         "  /vision on | off         enable / disable everything",
         "  /vision intercept on|off  toggle automatic image interception",
-        "  /vision config <key> <value>     set maxOutputTokens | maxRetries | maxRetryDelayMs | maxImageBytes | cacheDir | cacheTtlHours | showInFooter",
+        "  /vision config <key> <value>     set maxOutputTokens | maxRetries | maxRetryDelayMs | timeoutSeconds | maxImageBytes | cacheDir | cacheTtlHours | showInFooter",
         "  /vision test [path]     run an end-to-end analysis test",
         "  /vision cache           show cache stats (add clear to wipe)",
       ].join("\n");
@@ -238,7 +238,7 @@ export default function visionToolExtension(pi: ExtensionAPI): void {
           const raw = parts.slice(2).join(" ");
           if (!key) {
             ctx.ui.notify(
-              `Configurable keys: maxOutputTokens, maxRetries, maxRetryDelayMs, maxImageBytes, cacheDir, cacheTtlHours, showInFooter (true|false), convertFormats (comma list)`,
+              `Configurable keys: maxOutputTokens, maxRetries, maxRetryDelayMs, timeoutSeconds (per-call vision timeout in s, 0 = no limit), maxImageBytes, cacheDir, cacheTtlHours, showInFooter (true|false), convertFormats (comma list)`,
               "info",
             );
             return;
@@ -248,7 +248,8 @@ export default function visionToolExtension(pi: ExtensionAPI): void {
             case "maxRetries":
             case "maxRetryDelayMs":
             case "maxImageBytes":
-            case "cacheTtlHours": {
+            case "cacheTtlHours":
+            case "timeoutSeconds": {
               const n = Number(raw);
               if (!Number.isFinite(n) || n < 0) {
                 ctx.ui.notify(`Invalid number for ${key}: "${raw}"`, "error");

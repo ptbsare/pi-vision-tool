@@ -28,6 +28,8 @@ export interface VisionToolConfig {
   maxRetries: number;
   /** Backoff ceiling in ms (official pipeline). */
   maxRetryDelayMs: number;
+  /** Timeout per vision call in seconds (0 = disabled). Defaults to 300. */
+  timeoutSeconds: number;
   /**
    * Hard image size limit in bytes. Images above this are automatically
    * compressed with pi's official `resizeImage` before being sent.
@@ -57,6 +59,7 @@ export const DEFAULT_CONFIG: Omit<VisionToolConfig, "provider" | "model"> = {
   maxOutputTokens: 4096,
   maxRetries: 2,
   maxRetryDelayMs: 5000,
+  timeoutSeconds: 120,
   maxImageBytes: 10 * 1024 * 1024,
   cacheDir: path.join(os.tmpdir(), "pi-vision-tool-cache"),
   cacheTtlHours: 24,
@@ -121,6 +124,7 @@ export function configSummary(cfg: VisionToolConfig): string {
     `  Vision model:     ${cfg.provider && cfg.model ? `${cfg.provider}/${cfg.model}` : "(not configured — auto-discovery)"}`,
     `  Max output tokens:${cfg.maxOutputTokens}`,
     `  Retries:          ${cfg.maxRetries} (backoff ≤ ${cfg.maxRetryDelayMs}ms)`,
+    `  Timeout:          ${cfg.timeoutSeconds ? cfg.timeoutSeconds + "s" : "disabled"} (per-call, 0 = no limit)`,
     `  Max image bytes:  ${cfg.maxImageBytes}`,
     `  Cache dir:        ${cfg.cacheDir}`,
     `  Cache TTL:        ${cfg.cacheTtlHours}h`,

@@ -45,6 +45,29 @@ function extractText(message: AssistantMessage): string {
   return thinking;
 }
 
+/**
+ * Combine the parent (session) signal with a per-call timeout.
+ * Returns a fresh signal that aborts on parent abort or after timeoutMs ms;
+ * returns the parent unchanged when timeoutMs <= 0.
+ */
+function withTimeoutSignal(parent: AbortSignal | undefined, timeoutMs: number): AbortSignal | undefined {
+  if (timeoutMs <= 0) return parent;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(new Error("vision-call-timed-out")), timeoutMs);
+  if (parent) {
+    if (parent.aborted) {
+      clearTimeout(timer);
+      return parent;
+    }
+    parent.addEventListener("abort", () => {
+      clearTimeout(timer);
+      ac.abort(parent.reason);
+    }, { once: true });
+  }
+  ac.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+  return ac.signal;
+}
+
 export async function describeWithPipeline(
   ctx: ExtensionContext,
   model: Model<Api>,
@@ -53,7 +76,15 @@ export async function describeWithPipeline(
   question: string,
   signal?: AbortSignal,
 ): Promise<VisionAnswer> {
-  const messages: AssistantMessage = await ctx.modelRegistry.complete(
+  const effectiveSignal = withTimeoutSignal(signal, cfg.timeoutSeconds * 1000);
+  const timedOut = { current: false };
+  if (effectiveSignal) {
+    effectiveSignal.addEventListener("abort", () => {
+      timedOut.current = effectiveSignal.reason instanceof Error && effectiveSignal.reason.message === "vision-call-timed-out";
+    }, { once: true });
+  }
+
+  const result: AssistantMessage = await ctx.modelRegistry.complete(
     model,
     {
       systemPrompt: SYSTEM_PROMPT,
@@ -72,12 +103,22 @@ export async function describeWithPipeline(
       maxTokens: cfg.maxOutputTokens,
       maxRetries: cfg.maxRetries,
       maxRetryDelayMs: cfg.maxRetryDelayMs,
-      signal,
+      signal: effectiveSignal,
       temperature: 0,
     },
   );
 
-  const text = extractText(messages);
+  if (result.stopReason === "aborted") {
+    if (timedOut.current) {
+      throw new Error(`Vision call timed out after ${cfg.timeoutSeconds}s (configurable via timeoutSeconds, 0 = no limit)`);
+    }
+    throw new Error("Vision call was aborted");
+  }
+  if (result.stopReason === "error") {
+    throw new Error(`Vision model error: ${result.errorMessage ?? "unknown"}`);
+  }
+
+  const text = extractText(result);
   if (!text) throw new Error("vision model returned no text");
   return { text, model: `${model.provider}/${model.id}` };
 }

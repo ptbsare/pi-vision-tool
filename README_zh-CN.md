@@ -64,6 +64,7 @@ pi -e git:github.com/ptbsare/pi-vision-tool
   "maxOutputTokens": 4096,          // 视觉调用输出上限
   "maxRetries": 2,                  // 官方管线重试次数
   "maxRetryDelayMs": 5000,          // 官方管线退避上限
+  "timeoutSeconds": 120,            // 单次识别超时（秒），0 = 不限制
   "maxImageBytes": 10485760,        // 超过此大小自动压缩（官方 resizeImage）
   "cacheDir": "/tmp/pi-vision-tool-cache", // 分析图片的持久化缓存目录
   "cacheTtlHours": 24,              // 缓存 TTL（0 = 永不清理）
@@ -94,7 +95,7 @@ pi -e git:github.com/ptbsare/pi-vision-tool
 | `/vision list` | 列出可用（图像）模型 |
 | `/vision on` / `/vision off` | 总开关 |
 | `/vision intercept on\|off` | 仅切换自动拦截 |
-| `/vision config <key> <value>` | 调 `maxOutputTokens`、`maxRetries`、`maxRetryDelayMs`、`maxImageBytes`、`cacheDir`、`cacheTtlHours`、`showInFooter`、`convertFormats` |
+| `/vision config <key> <value>` | 调 `maxOutputTokens`、`maxRetries`、`maxRetryDelayMs`、`timeoutSeconds`、`maxImageBytes`、`cacheDir`、`cacheTtlHours`、`showInFooter`、`convertFormats` |
 | `/vision test [path]` | 端到端管线测试（自动生成测试图） |
 | `/vision cache` / `/vision cache clear` | 缓存统计 / 清空 |
 
@@ -125,6 +126,7 @@ cached-at: /tmp/pi-vision-tool-cache/k9x2f81a.png
 ## 设计说明
 
 - 所有视觉调用走 **pi 官方管线**：认证、协议（google-generative-ai / openai-completions / anthropic-messages）、重试全由 pi 处理 —— pi 支持的任何 provider（含 OAuth 订阅）都能用
+- 单次识别受 `timeoutSeconds` 约束（默认 **120 秒**，`0` 不限制）。超时立即中止并返回清晰错误，不会无限挂起；Ctrl+C 随时可取消
 - 用户原始消息永不改写；分析只注入发送给模型的瞬态上下文，原始图片块保留（TUI 照常显示）
 - 超大图片先用 pi 官方 `resizeImage` 压到 `maxImageBytes` 再发送
 - 单条消息多图按顺序逐张描述，避免并发冲击视觉模型

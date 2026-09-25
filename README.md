@@ -65,6 +65,7 @@ On first session start, the extension picks the **first available (authenticated
   "maxOutputTokens": 4096,          // vision call output cap
   "maxRetries": 2,                  // official-pipeline retry count
   "maxRetryDelayMs": 5000,          // official-pipeline backoff ceiling
+  "timeoutSeconds": 120,            // per-call vision timeout in seconds (0 = no limit)
   "maxImageBytes": 10485760,        // images above this are auto-resized (official resizeImage)
   "cacheDir": "/tmp/pi-vision-tool-cache", // where analyzed images are persisted
   "cacheTtlHours": 24,              // cache entry TTL (0 = never prune)
@@ -95,7 +96,7 @@ Format is detected from **magic bytes**, never from the file extension. Native f
 | `/vision list` | List available (image-capable) models |
 | `/vision on` / `/vision off` | Enable / disable everything |
 | `/vision intercept on\|off` | Toggle automatic interception only |
-| `/vision config <key> <value>` | Tune `maxOutputTokens`, `maxRetries`, `maxRetryDelayMs`, `maxImageBytes`, `cacheDir`, `cacheTtlHours`, `showInFooter`, `convertFormats` |
+| `/vision config <key> <value>` | Tune `maxOutputTokens`, `maxRetries`, `maxRetryDelayMs`, `timeoutSeconds`, `maxImageBytes`, `cacheDir`, `cacheTtlHours`, `showInFooter`, `convertFormats` |
 | `/vision test [path]` | End-to-end pipeline test (auto-generates a test image) |
 | `/vision cache` / `/vision cache clear` | Cache stats / wipe the cache |
 
@@ -127,6 +128,7 @@ The main model can therefore keep working on the same image with `describe_image
 ## Design notes
 
 - All vision calls cross **pi's official pipeline**, so auth, protocol (google-generative-ai / openai-completions / anthropic-messages) and retries are handled by pi itself — any provider pi supports works here, including OAuth-based ones.
+- Each vision call is bounded by `timeoutSeconds` (default **120s**, `0` disables the limit). On timeout the call aborts with a clear error message instead of hanging forever; Ctrl+C still cancels immediately.
 - The user's original message is never rewritten; analysis is only prepended to the transient provider-bound context, and original image blocks are kept so the TUI still renders them.
 - Oversized images are compressed with pi's official `resizeImage` to `maxImageBytes` before being sent.
 - Multiple images in one message are described sequentially to avoid bursting the vision provider.
