@@ -1,0 +1,46 @@
+{
+  "name": "pi-vision-tool",
+  "version": "0.1.0",
+  "description": "Pi extension: automatic image-to-text bridge (user messages + tool results + TUI paste) plus a describe_image tool, routed through pi's official pipeline. Zero-config auto-discovery, configurable resizeImage compression, multi-format support (HEIC/HEIF/AVIF/TIFF/SVG via conversion), and vision-cache paths so the model can re-verify images with different prompts.",
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "author": "ptbsare",
+  "keywords": [
+    "pi",
+    "pi-agent",
+    "pi-extension",
+    "vision",
+    "image",
+    "heic",
+    "describe_image",
+    "multimodal"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ptbsare/pi-vision-tool.git"
+  },
+  "homepage": "https://github.com/ptbsare/pi-vision-tool#readme",
+  "bugs": {
+    "url": "https://github.com/ptbsare/pi-vision-tool/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit --strict --skipLibCheck --target ES2022 --module ESNext --moduleResolution bundler --types \"\""
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "heic-convert": "^2.1.0",
+    "sharp": "^0.35.4"
+  }
+}
