@@ -72,6 +72,7 @@ On first session start, the extension picks the **first available (authenticated
   "cacheTtlHours": 24,              // cache entry TTL (0 = never prune)
   "autoIntercept": true,            // transparent bridging on/off
   "showInFooter": true,              // TUI footer indicator
+  "debug": false,                   // print runtime diagnostics to stderr (journal)
   "convertFormats": ["heic","heif","avif","tiff","tif","svg","ico","jfif"]
 }
 ```
@@ -97,7 +98,7 @@ Format is detected from **magic bytes**, never from the file extension. Native f
 | `/vision list` | List available (image-capable) models |
 | `/vision on` / `/vision off` | Enable / disable everything |
 | `/vision intercept on\|off` | Toggle automatic interception only |
-| `/vision config <key> <value>` | Tune `maxOutputTokens`, `maxRetries`, `maxRetryDelayMs`, `timeoutSeconds`, `maxImageBytes`, `cacheDir`, `cacheTtlHours`, `showInFooter`, `convertFormats` |
+| `/vision config <key> <value>` | Tune `maxOutputTokens`, `maxRetries`, `maxRetryDelayMs`, `timeoutSeconds`, `maxImageBytes`, `cacheDir`, `cacheTtlHours`, `showInFooter`, `debug`, `convertFormats` |
 | `/vision test [path]` | End-to-end pipeline test (auto-generates a test image) |
 | `/vision cache` / `/vision cache clear` | Cache stats / wipe the cache |
 
@@ -125,6 +126,31 @@ question (e.g. "extract all text verbatim").
 ```
 
 The main model can therefore keep working on the same image with `describe_image` — extract the text, read a specific region, list UI elements — whenever the initial description doesn't cover what it needs. Since the cached file is byte-identical to what was analyzed, every follow-up refers to the *same* image.
+
+## Debugging
+
+Set `"debug": true` in `vision-tool.json` (or run `/vision config debug true`) to print
+runtime diagnostics to stderr. Toggle it back off the same way (`/vision config debug false`).
+
+Diagnostics include: the loaded module path, agent dir, the raw + parsed config, and — at
+every hook exit point — whether images were detected, cache hits/misses, per-image vision
+call results, and which messages had analysis injected. This is the fastest way to see why
+an image was not analyzed.
+
+Where to read the output depends on how Pi runs:
+
+```bash
+# pi-web (systemd service)
+journalctl -u pi-web | grep pi-vision-tool
+
+# interactive TUI — diagnostics go to the terminal's stderr
+# (run pi from a terminal and watch it directly)
+
+# if pi is run under another supervisor, check that supervisor's log
+```
+
+`/vision status` also shows the current `Debug:` state. Debug logging is off by default and
+has no runtime cost when disabled.
 
 ## Design notes
 

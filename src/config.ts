@@ -132,6 +132,7 @@ export function configSummary(cfg: VisionToolConfig): string {
     `  Max image bytes:  ${cfg.maxImageBytes}`,
     `  Cache dir:        ${cfg.cacheDir}`,
     `  Cache TTL:        ${cfg.cacheTtlHours}h`,
+    `  Debug:            ${cfg.debug ? "on (stderr diagnostics to journal)" : "off"}`,
     `  Convert formats:  ${cfg.convertFormats.join(", ")}`,
     ``,
     `Config file: ${configPath()}`,

@@ -71,6 +71,7 @@ pi -e git:github.com/ptbsare/pi-vision-tool
   "cacheTtlHours": 24,              // 缓存 TTL（0 = 永不清理）
   "autoIntercept": true,            // 透明桥接开关
   "showInFooter": true,              // TUI 底栏指示器
+  "debug": false,                   // 向 stderr 打印运行诊断（进 journal）
   "convertFormats": ["heic","heif","avif","tiff","tif","svg","ico","jfif"]
 }
 ```
@@ -96,7 +97,7 @@ pi -e git:github.com/ptbsare/pi-vision-tool
 | `/vision list` | 列出可用（图像）模型 |
 | `/vision on` / `/vision off` | 总开关 |
 | `/vision intercept on\|off` | 仅切换自动拦截 |
-| `/vision config <key> <value>` | 调 `maxOutputTokens`、`maxRetries`、`maxRetryDelayMs`、`timeoutSeconds`、`maxImageBytes`、`cacheDir`、`cacheTtlHours`、`showInFooter`、`convertFormats` |
+| `/vision config <key> <value>` | 调 `maxOutputTokens`、`maxRetries`、`maxRetryDelayMs`、`timeoutSeconds`、`maxImageBytes`、`cacheDir`、`cacheTtlHours`、`showInFooter`、`debug`、`convertFormats` |
 | `/vision test [path]` | 端到端管线测试（自动生成测试图） |
 | `/vision cache` / `/vision cache clear` | 缓存统计 / 清空 |
 
@@ -123,6 +124,25 @@ cached-at: /tmp/pi-vision-tool-cache/k9x2f81a.png
 ```
 
 当首次描述没有覆盖模型所需的信息时，主模型可继续用 `describe_image` 深入分析同一张图 —— 提取文本、查看某个区域、列出 UI 元素等。缓存文件与分析的字节完全一致，每次追问都指向**同一张图**。
+
+## 调试
+
+在 `vision-tool.json` 里设 `"debug": true`（或运行 `/vision config debug true`）即可把运行诊断打印到 stderr；同样方式可关闭（`/vision config debug false`）。
+
+诊断内容包括：加载的模块路径、agent 目录、原始与解析后的配置，以及**每个钩子的退出点**——是否检测到图片、缓存命中/未命中、每张图的视觉调用结果、哪些消息注入了分析。这是排查“图片为何没被分析”的最快方式。
+
+输出位置取决于 Pi 的运行方式：
+
+```bash
+# pi-web（systemd 服务）
+journalctl -u pi-web | grep pi-vision-tool
+
+# 交互式 TUI —— 诊断走终端 stderr（在终端里直接运行 pi 观察）
+
+# 若 pi 由其他 supervisor 托管，则查该 supervisor 的日志
+```
+
+`/vision status` 也会显示当前 `Debug:` 状态。调试日志默认关闭，关闭时零运行时开销。
 
 ## 设计说明
 
