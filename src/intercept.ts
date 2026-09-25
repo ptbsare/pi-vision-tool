@@ -34,11 +34,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { createHash } from "node:crypto";
-import { loadImageFromContent, imageHash } from "./images";
+import { loadImageFromContent, loadImageFromFile, imageHash, needsConversion } from "./images";
 import { describeWithPipeline, buildAnalysisContext } from "./vision";
 import { findConfiguredModel, modelRef } from "./discovery";
 import { extractInputImagePaths } from "./input-images";
-import { loadImageFromFile } from "./images";
 import type { VisionToolConfig } from "./config";
 
 interface InterceptDeps {
@@ -195,7 +194,28 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
     const cfg = deps.getConfig();
     if (!cfg.enabled || !cfg.autoIntercept) { dbg("input: disabled"); return; }
     dbg(`input: textLen=${event.text.length} nativeImages=${(event.images ?? []).length}`);
-    let images = [...(event.images ?? [])];
+
+    // pi's own attach pipeline only inlines png/jpeg/gif/webp/bmp. HEIC/AVIF/
+    // TIFF/SVG/ICO attachments get rejected by pi as "[Image omitted: could not
+    // be converted to a supported inline image format.]" BEFORE our context
+    // hook ever sees them. Convert such native attachments to JPEG here so pi
+    // accepts them and the image actually reaches the vision pipeline.
+    let images: ImageContent[] = [];
+    for (const img of event.images ?? []) {
+      try {
+        if (needsConversion(img.data, cfg)) {
+          const loaded = await loadImageFromContent(img, cfg);
+          images.push({ type: "image", data: loaded.data, mimeType: loaded.mimeType });
+          dbg(`input: converted native attachment (${img.mimeType} → ${loaded.mimeType}, ${loaded.data.length}b)`);
+        } else {
+          images.push(img);
+        }
+      } catch (e) {
+        dbg(`input: native attachment convert failed: ${e instanceof Error ? e.message : String(e)}`);
+        images.push(img); // fall back to original
+      }
+    }
+
     const { paths } = extractInputImagePaths(event.text);
     for (const p of paths) {
       try {

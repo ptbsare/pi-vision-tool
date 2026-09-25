@@ -195,6 +195,15 @@ async function persistCache(data: string, mimeType: string, cfg: VisionToolConfi
   return file;
 }
 
+
+/** True when the image bytes are in a format pi itself cannot attach inline
+ *  (i.e. not png/jpeg/gif/webp/bmp) and our conversion chain can convert it. */
+export function needsConversion(data: string, cfg: VisionToolConfig): boolean {
+  const bytes = Buffer.from(data, "base64");
+  const sniffed = sniffFormat(bytes);
+  return sniffed.convertible && convertibleAllowed(sniffed.ext, cfg);
+}
+
 /** Load an image from a file path (supports HEIC/AVIF/TIFF/SVG/... via conversion). */
 export async function loadImageFromFile(imagePath: string, cfg: VisionToolConfig): Promise<LoadedImage> {
   const bytes = await readFile(imagePath);
