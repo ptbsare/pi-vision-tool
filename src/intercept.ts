@@ -99,8 +99,13 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
       try {
         const loaded = await loadImageFromContent(img, cfg);
         const answer = await describeWithPipeline(ctx, model, cfg, loaded, question, ctx.signal);
+        // Key by the ORIGINAL ImageContent hash — the lookup side (context /
+        // tool_result) iterates the original content parts and must find the
+        // block even when conversion/resize changed the sent bytes (HEIC→JPEG
+        // or an oversized image). The cache path inside the block refers to
+        // the exact bytes that were analyzed.
         out.set(
-          imageHash(loaded.data, loaded.mimeType),
+          imageHash(img.data, img.mimeType),
           buildAnalysisContext({ text: answer.text, cachePath: answer.cachePath ?? loaded.cachePath, note: loaded.note ?? answer.note }),
         );
         deps.onCall?.(true);
