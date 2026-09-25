@@ -37,25 +37,29 @@ import { generateTestImage } from "./src/test-image";
 // pi-vision-tool — see LICENSE for the full GPLv3 text.
 // Copyright (C) 2026 ptbsare
 
-/* DEBUG LOG — remove before release. Writes runtime diagnostics to stderr
- * so they land in the pi-web systemd journal (journalctl -u pi-web). */
+/* DEBUG LOG — controlled by "debug": true in vision-tool.json. Writes runtime
+ * diagnostics to stderr so they land in the pi-web systemd journal. */
 import { readFileSync } from "node:fs";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 const __dbg = (m: string) => process.stderr.write(`[pi-vision-tool][debug] ${m}\n`);
-__dbg(`module: ${import.meta.url}`);
-__dbg(`node ${process.version} @ ${process.execPath}`);
-try {
-  __dbg(`agentDir: ${getAgentDir()}`);
-  __dbg(`configPath: ${configPath()}`);
-  __dbg(`configRaw: ${readFileSync(configPath(), "utf-8").replace(/\s+/g, " ").slice(0, 400)}`);
-} catch (e) {
-  __dbg(`config read FAIL: ${e instanceof Error ? e.message : String(e)}`);
+{
+  const __cfg0 = loadConfig();
+  if (__cfg0.debug) {
+    __dbg(`module: ${import.meta.url}`);
+    __dbg(`node ${process.version} @ ${process.execPath}`);
+    try {
+      __dbg(`agentDir: ${getAgentDir()}`);
+      __dbg(`configPath: ${configPath()}`);
+      __dbg(`configRaw: ${readFileSync(configPath(), "utf-8").replace(/\s+/g, " ").slice(0, 500)}`);
+    } catch (e) {
+      __dbg(`config read FAIL: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    __dbg(
+      `parsed: provider=${__cfg0.provider} model=${__cfg0.model} enabled=${__cfg0.enabled} ` +
+      `maxRetries=${__cfg0.maxRetries} timeoutSeconds=${__cfg0.timeoutSeconds} maxImageBytes=${__cfg0.maxImageBytes} cacheDir=${__cfg0.cacheDir}`,
+    );
+  }
 }
-const __cfg = loadConfig();
-__dbg(
-  `parsed: provider=${__cfg.provider} model=${__cfg.model} enabled=${__cfg.enabled} ` +
-  `maxRetries=${__cfg.maxRetries} timeoutSeconds=${__cfg.timeoutSeconds} maxImageBytes=${__cfg.maxImageBytes} cacheDir=${__cfg.cacheDir}`,
-);
 /* END DEBUG */
 
 export default function visionToolExtension(pi: ExtensionAPI): void {
@@ -156,6 +160,9 @@ export default function visionToolExtension(pi: ExtensionAPI): void {
     onCall: (ok) => {
       footerVisible = true;
       lastCallOk = ok;
+    },
+    debugLog: (msg) => {
+      if (getConfig().debug) process.stderr.write(`[pi-vision-tool] ${msg}\n`);
     },
   });
 

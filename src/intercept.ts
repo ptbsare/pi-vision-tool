@@ -39,6 +39,7 @@ import type { VisionToolConfig } from "./config";
 interface InterceptDeps {
   getConfig: () => VisionToolConfig;
   onCall?: (ok: boolean) => void;
+  debugLog?: (msg: string) => void;
 }
 
 type ContextTransform = { messages: ContextEvent["messages"] };
@@ -102,6 +103,7 @@ function toolAnalysisPrompt(toolName: string, input: Record<string, unknown> | u
 }
 
 export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): void {
+  const dbg = (m: string) => deps.debugLog?.(m);
   let activePromptKey: string | undefined;
   let activeAnalysis:
     | { key: string; result?: Map<string, string>; pending?: Promise<Map<string, string>>; completed?: boolean }
@@ -114,12 +116,18 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
   ): Promise<Map<string, string>> {
     const cfg = deps.getConfig();
     const model = findConfiguredModel(ctx, cfg.provider, cfg.model);
-    if (!model) return new Map();
+    if (!model) {
+      dbg(`analyzeImages: vision model ${cfg.provider}/${cfg.model} NOT FOUND, returning empty`);
+      return new Map();
+    }
+    dbg(`analyzeImages: start ${images.length} image(s) with ${model.provider}/${model.id}, question=${question.slice(0,80).replace(/\n/g," ")}`);
     const out = new Map<string, string>();
     for (const img of images) {
       try {
         const loaded = await loadImageFromContent(img, cfg);
+        dbg(`  image[${imageHash(img.data, img.mimeType).slice(0, 8)}] loaded, mimeType=${loaded.mimeType} cached=${loaded.cachePath} dataLen=${loaded.data.length}`);
         const answer = await describeWithPipeline(ctx, model, cfg, loaded, question, ctx.signal);
+        dbg(`  image[..] answered, textLen=${answer.text.length}`);
         // Key by the ORIGINAL ImageContent hash — the lookup side (context /
         // tool_result) iterates the original content parts and must find the
         // block even when conversion/resize changed the sent bytes (HEIC→JPEG
@@ -129,10 +137,12 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
           buildAnalysisContext({ text: answer.text, cachePath: answer.cachePath ?? loaded.cachePath, note: loaded.note ?? answer.note }),
         );
         deps.onCall?.(true);
-      } catch {
+      } catch (e) {
+        dbg(`  image[...] FAILED: ${e instanceof Error ? e.message : String(e)}`);
         deps.onCall?.(false);
       }
     }
+    dbg(`analyzeImages: done, ${out.size}/${images.length} succeeded`);
     return out;
   }
 
@@ -146,44 +156,51 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
     }
     activePromptKey = h.digest("hex");
     activeAnalysis = undefined;
+    dbg(`before_agent_start: promptLen=${(event.prompt ?? "").length} images=${(event.images ?? []).length} key=${activePromptKey.slice(0, 12)}`);
   });
 
   pi.on("agent_settled", () => {
+    dbg("agent_settled: cleared prompt key");
     activePromptKey = undefined;
     activeAnalysis = undefined;
   });
 
   // --- 1. TUI paste / referenced image paths -> native attachments ----------
   pi.on("input", async (event, ctx) => {
-    if (!ctx.model) return;
+    if (!ctx.model) { dbg("input: no model, exit"); return; }
     const input = (ctx.model.input ?? ["text"]) as string[];
-    if (input.includes("image")) return; // multimodal models pass through unchanged
+    if (input.includes("image")) { dbg("input: multimodal, passthrough"); return; }
     const cfg = deps.getConfig();
-    if (!cfg.enabled || !cfg.autoIntercept) return;
+    if (!cfg.enabled || !cfg.autoIntercept) { dbg("input: disabled, exit"); return; }
+    dbg(`input: textLen=${event.text.length} nativeImages=${(event.images ?? []).length}`);
     let images = [...(event.images ?? [])];
     const { paths } = extractInputImagePaths(event.text);
+    if (paths.length > 0) dbg(`input: extracted ${paths.length} path(s): ${paths.join(", ").slice(0, 200)}`);
     for (const p of paths) {
       try {
         const loaded = await loadImageFromFile(p, cfg);
         images.push({ type: "image", data: loaded.data, mimeType: loaded.mimeType });
+        dbg(`input: materialized ${p} -> ${loaded.mimeType} ${loaded.data.length}b cached=${loaded.cachePath}`);
       } catch {
-        // not a readable image -> leave the text untouched
+        dbg(`input: path ${p} not readable, skipped`);
       }
     }
     const cleanedText = cleanImageTextNotes(event.text);
-    if (images.length === 0 && cleanedText === event.text.trim()) return;
+    if (images.length === 0 && cleanedText === event.text.trim()) { dbg("input: nothing to transform"); return; }
+    dbg(`input: transform, ${images.length} image(s), textChanged=${cleanedText !== event.text}`);
     return { action: "transform", text: cleanedText || event.text, images } as never;
   });
 
   // --- 2. user messages -> inject analysis and strip image blocks ------------
   pi.on("context", async (event, ctx): Promise<ContextTransform | undefined> => {
-    if (!ctx.model) return undefined;
+    if (!ctx.model) { dbg("context: no model, exit"); return undefined; }
     const input = (ctx.model.input ?? ["text"]) as string[];
-    if (input.includes("image")) return undefined;
+    if (input.includes("image")) { dbg("context: multimodal, exit"); return undefined; }
     const cfg = deps.getConfig();
-    if (!cfg.enabled || !cfg.autoIntercept) return undefined;
+    if (!cfg.enabled || !cfg.autoIntercept) { dbg("context: disabled, exit"); return undefined; }
     const key = activePromptKey;
-    if (!key) return undefined;
+    if (!key) { dbg("context: NO activePromptKey (before_agent_start didn't fire?), exit"); return undefined; }
+    dbg(`context: messages=${event.messages.length} key=${key.slice(0, 12)}`);
 
     const messages: ContextEvent["messages"] = [];
     let changed = false;
@@ -197,6 +214,7 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
         messages.push(msg);
         continue;
       }
+      dbg(`context: user msg has ${images.length} image(s), textLen=${userMessageText(msg).length}`);
       const prompt = userMessageText(msg);
       if (!activeAnalysis || activeAnalysis.key !== key) {
         activeAnalysis = { key, pending: undefined as never };
@@ -219,10 +237,11 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
         .filter((b): b is string => Boolean(b));
 
       if (blocks.length === 0) {
+        dbg(`context: blocks EMPTY for ${images.length} image(s) (analysis failed) — keeping original msg with image blocks`);
         messages.push(msg);
         continue;
       }
-
+      dbg(`context: injected ${blocks.length} analysis block(s), stripping ${images.length} image block(s)`);
       changed = true;
 
       // Filter out `type: "image"` blocks from the user message sent to the provider.
@@ -251,17 +270,18 @@ export function registerInterceptors(pi: ExtensionAPI, deps: InterceptDeps): voi
 
   // --- 3. tool results -> inject analysis and clean notes --------------------
   pi.on("tool_result", async (event: ToolResultEvent, ctx) => {
-    if (!ctx.model) return undefined;
+    if (!ctx.model) { dbg("tool_result: no model, exit"); return undefined; }
     const input = (ctx.model.input ?? ["text"]) as string[];
-    if (input.includes("image")) return undefined;
+    if (input.includes("image")) { dbg("tool_result: multimodal, exit"); return undefined; }
     const cfg = deps.getConfig();
-    if (!cfg.enabled || !cfg.autoIntercept) return undefined;
-    if (event.isError) return undefined;
+    if (!cfg.enabled || !cfg.autoIntercept) { dbg("tool_result: disabled, exit"); return undefined; }
+    if (event.isError) { dbg("tool_result: isError, exit"); return undefined; }
 
     const images = (event.content ?? []).filter(
       (p): p is ImageContent => typeof p === "object" && p !== null && (p as { type?: string }).type === "image",
     );
-    if (images.length === 0) return undefined;
+    if (images.length === 0) { dbg("tool_result: no images, exit"); return undefined; }
+    dbg(`tool_result: ${event.toolName} has ${images.length} image(s)`);
 
     const question = toolAnalysisPrompt(event.toolName ?? "", (event.input ?? {}) as Record<string, unknown>);
     const texts = await analyzeImages(images, question, ctx);

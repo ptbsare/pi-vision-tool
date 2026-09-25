@@ -47,6 +47,8 @@ export interface VisionToolConfig {
   autoIntercept: boolean;
   /** Show `vision: provider/model` in the TUI footer after first use. */
   showInFooter: boolean;
+  /** Print runtime diagnostics to stderr (lands in journal). Only for dev use. */
+  debug: boolean;
   /**
    * Extra image formats accepted via conversion (heic/heif/avif/tiff/svg/ico...).
    * Native formats (png/jpeg/gif/webp/bmp) are always accepted.
@@ -104,6 +106,7 @@ export function loadConfig(): VisionToolConfig {
     cacheTtlHours: num(data.cacheTtlHours, d.cacheTtlHours),
     autoIntercept: bool(data.autoIntercept, d.autoIntercept),
     showInFooter: bool(data.showInFooter, d.showInFooter),
+    debug: bool(data.debug, d.debug),
     convertFormats: Array.isArray(data.convertFormats)
       ? (data.convertFormats as unknown[]).filter((x): x is string => typeof x === "string")
       : d.convertFormats,
