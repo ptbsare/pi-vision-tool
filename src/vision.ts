@@ -51,7 +51,7 @@ function extractText(message: AssistantMessage): string {
  * returns the parent unchanged when timeoutMs <= 0.
  */
 function withTimeoutSignal(parent: AbortSignal | undefined, timeoutMs: number): AbortSignal | undefined {
-  if (timeoutMs <= 0) return parent;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return parent;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(new Error("vision-call-timed-out")), timeoutMs);
   if (parent) {
@@ -76,7 +76,13 @@ export async function describeWithPipeline(
   question: string,
   signal?: AbortSignal,
 ): Promise<VisionAnswer> {
-  const effectiveSignal = withTimeoutSignal(signal, cfg.timeoutSeconds * 1000);
+  // Defensive: never let a missing/NaN timeoutSeconds produce setTimeout(NaN)
+  // (Node coerces NaN to 1ms -> instant abort). 0 means "no timeout".
+  const timeoutSeconds =
+    typeof cfg.timeoutSeconds === "number" && Number.isFinite(cfg.timeoutSeconds) && cfg.timeoutSeconds > 0
+      ? cfg.timeoutSeconds
+      : 0;
+  const effectiveSignal = withTimeoutSignal(signal, timeoutSeconds * 1000);
   const timedOut = { current: false };
   if (effectiveSignal) {
     effectiveSignal.addEventListener("abort", () => {
@@ -110,7 +116,7 @@ export async function describeWithPipeline(
 
   if (result.stopReason === "aborted") {
     if (timedOut.current) {
-      throw new Error(`Vision call timed out after ${cfg.timeoutSeconds}s (configurable via timeoutSeconds, 0 = no limit)`);
+      throw new Error(`Vision call timed out after ${timeoutSeconds}s (configurable via timeoutSeconds, 0 = no limit)`);
     }
     throw new Error("Vision call was aborted");
   }

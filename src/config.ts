@@ -98,6 +98,7 @@ export function loadConfig(): VisionToolConfig {
     maxOutputTokens: num(data.maxOutputTokens, d.maxOutputTokens),
     maxRetries: num(data.maxRetries, d.maxRetries),
     maxRetryDelayMs: num(data.maxRetryDelayMs, d.maxRetryDelayMs),
+    timeoutSeconds: num(data.timeoutSeconds, d.timeoutSeconds),
     maxImageBytes: num(data.maxImageBytes, d.maxImageBytes),
     cacheDir: str(data.cacheDir, d.cacheDir),
     cacheTtlHours: num(data.cacheTtlHours, d.cacheTtlHours),

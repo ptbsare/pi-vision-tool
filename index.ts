@@ -33,6 +33,30 @@ import { registerDescribeTool } from "./src/tool";
 import { describeWithPipeline } from "./src/vision";
 import { loadImageFromFile, cacheStats, clearCache, formatBytes } from "./src/images";
 import { generateTestImage } from "./src/test-image";
+// SPDX-License-Identifier: GPL-3.0-or-later
+// pi-vision-tool — see LICENSE for the full GPLv3 text.
+// Copyright (C) 2026 ptbsare
+
+/* DEBUG LOG — remove before release. Writes runtime diagnostics to stderr
+ * so they land in the pi-web systemd journal (journalctl -u pi-web). */
+import { readFileSync } from "node:fs";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+const __dbg = (m: string) => process.stderr.write(`[pi-vision-tool][debug] ${m}\n`);
+__dbg(`module: ${import.meta.url}`);
+__dbg(`node ${process.version} @ ${process.execPath}`);
+try {
+  __dbg(`agentDir: ${getAgentDir()}`);
+  __dbg(`configPath: ${configPath()}`);
+  __dbg(`configRaw: ${readFileSync(configPath(), "utf-8").replace(/\s+/g, " ").slice(0, 400)}`);
+} catch (e) {
+  __dbg(`config read FAIL: ${e instanceof Error ? e.message : String(e)}`);
+}
+const __cfg = loadConfig();
+__dbg(
+  `parsed: provider=${__cfg.provider} model=${__cfg.model} enabled=${__cfg.enabled} ` +
+  `maxRetries=${__cfg.maxRetries} timeoutSeconds=${__cfg.timeoutSeconds} maxImageBytes=${__cfg.maxImageBytes} cacheDir=${__cfg.cacheDir}`,
+);
+/* END DEBUG */
 
 export default function visionToolExtension(pi: ExtensionAPI): void {
   let cfg = loadConfig();
