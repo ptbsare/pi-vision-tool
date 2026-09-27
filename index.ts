@@ -68,19 +68,26 @@ export default function visionToolExtension(pi: ExtensionAPI): void {
   // once at startup so results survive pi-web restarts, and cleared together
   // with /vision cache clear.
   const sharedAnalysisCache = loadAnalysisCache(cfg);
-  let footerVisible = false;
   let toolRegistered = false;
 
   function getConfig(): VisionToolConfig {
     return cfg;
   }
 
+  /**
+   * Footer indicator — config-ready display (方案 B):
+   * shows "👁 vision: provider/model" whenever the extension is configured
+   * AND the active main model is text-only (a multimodal main model already
+   * sees images itself, so the vision indicator would be noise). Hidden when
+   * showInFooter is off, the extension is disabled, or not configured.
+   */
   function refreshFooter(ctx: ExtensionContext): void {
-    if (!cfg.showInFooter || !footerVisible || !cfg.enabled || !cfg.provider || !cfg.model) {
-      ctx.ui.setStatus("vision", undefined);
-      return;
-    }
-    ctx.ui.setStatus("vision", `👁 ${cfg.provider}/${cfg.model}`);
+    const activeModel = ctx.model;
+    const mainIsMultimodal =
+      activeModel && Array.isArray(activeModel.input) && activeModel.input.includes("image");
+    const shouldShow =
+      cfg.showInFooter && cfg.enabled && cfg.provider && cfg.model && !mainIsMultimodal;
+    ctx.ui.setStatus("vision", shouldShow ? `👁 vision: ${cfg.provider}/${cfg.model}` : undefined);
   }
 
   function ensureToolActive(active: boolean): void {
@@ -96,7 +103,7 @@ export default function visionToolExtension(pi: ExtensionAPI): void {
     registerDescribeTool(pi, {
       getConfig,
       onCall: (ok) => {
-        footerVisible = true;
+
         lastCallOk = ok;
       },
     });
@@ -162,7 +169,6 @@ export default function visionToolExtension(pi: ExtensionAPI): void {
   registerInterceptors(pi, {
     getConfig,
     onCall: (ok) => {
-      footerVisible = true;
       lastCallOk = ok;
     },
     debugLog: (msg) => {
@@ -173,7 +179,6 @@ export default function visionToolExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     cfg = loadConfig();
-    footerVisible = false;
     await initialize(ctx);
     refreshFooter(ctx);
   });
