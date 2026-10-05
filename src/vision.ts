@@ -136,10 +136,21 @@ export async function describeWithPipeline(
         if (signal?.aborted) throw new Error("Vision call was aborted");
         throw new Error(`Vision call timed out after ${timeoutSeconds}s (configurable via timeoutSeconds, 0 = no limit)`);
       }
-      if (result.stopReason === "error") {
-        throw new Error(`Vision model error: ${result.errorMessage ?? "unknown"}`);
-      }
       const text = extractText(result);
+      if (result.stopReason === "error") {
+        // pi's openai-completions stream throws "Stream ended without finish_reason"
+        // when the SSE stream closes before a finish_reason arrives — but by then
+        // the full response text has already been accumulated into result.content.
+        // The catch block in pi just flips stopReason to "error" and forwards the
+        // message with its content intact. So when the error is a stream-interruption
+        // AND we already have text, the content is complete — use it instead of
+        // discarding it and retrying (which would just waste another API call).
+        const errMsg = result.errorMessage ?? "";
+        if (text && STREAM_ERROR_RE.test(errMsg)) {
+          return { text, model: `${model.provider}/${model.id}` };
+        }
+        throw new Error(`Vision model error: ${errMsg || "unknown"}`);
+      }
       if (!text) throw new Error("vision model returned no text");
       return { text, model: `${model.provider}/${model.id}` };
     } catch (err) {
