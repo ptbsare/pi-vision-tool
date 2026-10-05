@@ -82,51 +82,77 @@ export async function describeWithPipeline(
     typeof cfg.timeoutSeconds === "number" && Number.isFinite(cfg.timeoutSeconds) && cfg.timeoutSeconds > 0
       ? cfg.timeoutSeconds
       : 0;
-  const effectiveSignal = withTimeoutSignal(signal, timeoutSeconds * 1000);
-  const timedOut = { current: false };
-  if (effectiveSignal) {
-    effectiveSignal.addEventListener("abort", () => {
-      timedOut.current = effectiveSignal.reason instanceof Error && effectiveSignal.reason.message === "vision-call-timed-out";
-    }, { once: true });
-  }
 
-  const result: AssistantMessage = await ctx.modelRegistry.complete(
-    model,
-    {
-      systemPrompt: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text" as const, text: question },
-            { type: "image" as const, data: image.data, mimeType: image.mimeType },
-          ],
-          timestamp: Date.now(),
-        },
-      ],
-    },
-    {
-      maxTokens: cfg.maxOutputTokens,
-      maxRetries: cfg.maxRetries,
-      maxRetryDelayMs: cfg.maxRetryDelayMs,
-      signal: effectiveSignal,
-      temperature: 0,
-    },
-  );
+  /**
+   * pi's provider retry (retryProviderRequest) only covers HTTP errors that
+   * carry `status`/`headers` (429/5xx/408). Stream-interruption errors like
+   * "Stream ended without finish_reason" (EOF before the provider sent a
+   * finish_reason) are plain Errors with no status, so pi never retries them.
+   * This inner retry exists purely to catch those. Transient network failures
+   * (ECONNRESET etc.) sometimes also surface without status — retrying them a
+   * couple of times is safe because vision calls are idempotent (same image +
+   * question = same answer, and results are cached by image hash anyway).
+   */
+  const STREAM_ERROR_RE =
+    /Stream ended without finish_reason|Unexpected end of stream|ECONNRESET|ETIMEDOUT|EPIPE|socket hang up|fetch failed|terminated|incomplete response/i;
+  const extraRetries = typeof cfg.streamRetries === "number" && cfg.streamRetries >= 0
+    ? cfg.streamRetries
+    : Math.max(1, cfg.maxRetries || 1); // default: same budget as pi's own retry
 
-  if (result.stopReason === "aborted") {
-    if (timedOut.current) {
-      throw new Error(`Vision call timed out after ${timeoutSeconds}s (configurable via timeoutSeconds, 0 = no limit)`);
+  const attempt = async (): Promise<AssistantMessage> => {
+    const effectiveSignal = withTimeoutSignal(signal, timeoutSeconds * 1000);
+    return ctx.modelRegistry.complete(
+      model,
+      {
+        systemPrompt: SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text" as const, text: question },
+              { type: "image" as const, data: image.data, mimeType: image.mimeType },
+            ],
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      {
+        maxTokens: cfg.maxOutputTokens,
+        maxRetries: cfg.maxRetries,
+        maxRetryDelayMs: cfg.maxRetryDelayMs,
+        signal: effectiveSignal,
+        temperature: 0,
+      },
+    );
+  };
+
+  let lastError: unknown;
+  for (let attemptNum = 0; attemptNum <= extraRetries; attemptNum++) {
+    try {
+      const result: AssistantMessage = await attempt();
+      if (result.stopReason === "aborted") {
+        if (signal?.aborted) throw new Error("Vision call was aborted");
+        throw new Error(`Vision call timed out after ${timeoutSeconds}s (configurable via timeoutSeconds, 0 = no limit)`);
+      }
+      if (result.stopReason === "error") {
+        throw new Error(`Vision model error: ${result.errorMessage ?? "unknown"}`);
+      }
+      const text = extractText(result);
+      if (!text) throw new Error("vision model returned no text");
+      return { text, model: `${model.provider}/${model.id}` };
+    } catch (err) {
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      // Only stream-interruption errors get our extra retry. Everything else
+      // (HTTP errors, auth, abort, timeout) is final — pi's own retry already
+      // handled the retryable HTTP cases inside complete().
+      const isStreamError = STREAM_ERROR_RE.test(msg);
+      if (!isStreamError || attemptNum >= extraRetries) break;
+      const delay = Math.min(500 * 2 ** attemptNum, cfg.maxRetryDelayMs || 5000);
+      await new Promise((r) => setTimeout(r, delay));
     }
-    throw new Error("Vision call was aborted");
   }
-  if (result.stopReason === "error") {
-    throw new Error(`Vision model error: ${result.errorMessage ?? "unknown"}`);
-  }
-
-  const text = extractText(result);
-  if (!text) throw new Error("vision model returned no text");
-  return { text, model: `${model.provider}/${model.id}` };
+  throw lastError;
 }
 
 /** Format the analysis block injected into context / tool results. */

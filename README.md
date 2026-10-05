@@ -64,8 +64,9 @@ On first session start, the extension picks the **first available (authenticated
   "provider": "google",              // vision provider (models.json)
   "model": "gemini-2.5-flash",      // must declare input: ["text","image"]
   "maxOutputTokens": 4096,          // vision call output cap
-  "maxRetries": 2,                  // official-pipeline retry count
+  "maxRetries": 2,                  // official-pipeline retry count (HTTP errors only)
   "maxRetryDelayMs": 5000,          // official-pipeline backoff ceiling
+  "streamRetries": 2,               // extra retries for EOF/stream-interruption errors (pi does NOT retry these)
   "timeoutSeconds": 120,            // per-call vision timeout in seconds (0 = no limit)
   "maxImageBytes": 10485760,        // images above this are auto-resized (official resizeImage)
   "cacheDir": "/tmp/pi-vision-tool-cache", // where analyzed images are persisted
