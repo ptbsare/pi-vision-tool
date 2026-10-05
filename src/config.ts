@@ -24,13 +24,11 @@ export interface VisionToolConfig {
   model: string;
   /** Max output tokens for the vision call (official pipeline). */
   maxOutputTokens: number;
-  /** Retry count for the vision call (official pipeline; 4xx not retried). */
+  /** Retry count for the vision call — covers BOTH HTTP errors (pi retries inside complete())
+   *  AND stream-interruption errors like EOF/"Stream ended without finish_reason" (we retry in vision.ts). */
   maxRetries: number;
   /** Backoff ceiling in ms (official pipeline). */
   maxRetryDelayMs: number;
-  /** Extra retries for stream-interruption errors (EOF, "Stream ended without finish_reason",
-   *  socket hang up) that pi's provider retry does NOT cover. 0 disables. Defaults to maxRetries. */
-  streamRetries: number;
   /** Timeout per vision call in seconds (0 = disabled). Defaults to 300. */
   timeoutSeconds: number;
   /**
@@ -64,7 +62,6 @@ export const DEFAULT_CONFIG: Omit<VisionToolConfig, "provider" | "model"> = {
   maxOutputTokens: 4096,
   maxRetries: 2,
   maxRetryDelayMs: 5000,
-  streamRetries: 2,
   timeoutSeconds: 120,
   maxImageBytes: 10 * 1024 * 1024,
   cacheDir: path.join(os.tmpdir(), "pi-vision-tool-cache"),
@@ -104,7 +101,6 @@ export function loadConfig(): VisionToolConfig {
     maxOutputTokens: num(data.maxOutputTokens, d.maxOutputTokens),
     maxRetries: num(data.maxRetries, d.maxRetries),
     maxRetryDelayMs: num(data.maxRetryDelayMs, d.maxRetryDelayMs),
-    streamRetries: num(data.streamRetries, d.streamRetries),
     timeoutSeconds: num(data.timeoutSeconds, d.timeoutSeconds),
     maxImageBytes: num(data.maxImageBytes, d.maxImageBytes),
     cacheDir: str(data.cacheDir, d.cacheDir),
@@ -133,7 +129,6 @@ export function configSummary(cfg: VisionToolConfig): string {
     `  Vision model:     ${cfg.provider && cfg.model ? `${cfg.provider}/${cfg.model}` : "(not configured — auto-discovery)"}`,
     `  Max output tokens:${cfg.maxOutputTokens}`,
     `  Retries:          ${cfg.maxRetries} (backoff ≤ ${cfg.maxRetryDelayMs}ms)`,
-    `  Stream retries:    ${cfg.streamRetries} (EOF/finish_reason gaps — pi does not retry these)`,
     `  Timeout:          ${cfg.timeoutSeconds ? cfg.timeoutSeconds + "s" : "disabled"} (per-call, 0 = no limit)`,
     `  Max image bytes:  ${cfg.maxImageBytes}`,
     `  Cache dir:        ${cfg.cacheDir}`,

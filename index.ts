@@ -208,7 +208,7 @@ export default function visionToolExtension(pi: ExtensionAPI): void {
         "  /vision list            list image-capable models",
         "  /vision on | off         enable / disable everything",
         "  /vision intercept on|off  toggle automatic image interception",
-        "  /vision config <key> <value>     set maxOutputTokens | maxRetries | maxRetryDelayMs | timeoutSeconds | streamRetries | maxImageBytes | cacheDir | cacheTtlHours | showInFooter | debug",
+        "  /vision config <key> <value>     set maxOutputTokens | maxRetries | maxRetryDelayMs | timeoutSeconds | maxImageBytes | cacheDir | cacheTtlHours | showInFooter | debug",
         "  /vision test [path]     run an end-to-end analysis test",
         "  /vision cache           show cache stats (add clear to wipe)",
       ].join("\n");
@@ -279,7 +279,7 @@ export default function visionToolExtension(pi: ExtensionAPI): void {
           const raw = parts.slice(2).join(" ");
           if (!key) {
             ctx.ui.notify(
-              `Configurable keys: maxOutputTokens, maxRetries, maxRetryDelayMs, timeoutSeconds (per-call vision timeout in s, 0 = no limit), streamRetries (extra retries for EOF/stream-interruption errors that pi does not retry, 0 = off), maxImageBytes, cacheDir, cacheTtlHours (TTL for both image files and analysis cache, 0 = never prune), showInFooter (true|false), debug (true|false), convertFormats (comma list)`,
+              `Configurable keys: maxOutputTokens, maxRetries, maxRetryDelayMs, timeoutSeconds (per-call vision timeout in s, 0 = no limit), maxImageBytes, cacheDir, cacheTtlHours (TTL for both image files and analysis cache, 0 = never prune), showInFooter (true|false), debug (true|false), convertFormats (comma list)`,
               "info",
             );
             return;

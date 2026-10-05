@@ -63,9 +63,8 @@ pi -e git:github.com/ptbsare/pi-vision-tool
   "provider": "google",              // 视觉模型 provider（models.json）
   "model": "gemini-2.5-flash",      // 必须声明 input: ["text","image"]
   "maxOutputTokens": 4096,          // 视觉调用输出上限
-  "maxRetries": 2,                  // 官方管线重试次数（仅 HTTP 错误）
-  "maxRetryDelayMs": 5000,          // 官方管线退避上限
-  "streamRetries": 2,               // EOF/流中断类错误的额外重试（pi 不重试这类）
+  "maxRetries": 2,                  // 重试次数：同时覆盖 HTTP 错误（pi）和 EOF/流中断错误（我们）
+  "maxRetryDelayMs": 5000,          // 重试退避上限
   "timeoutSeconds": 120,            // 单次识别超时（秒），0 = 不限制
   "maxImageBytes": 10485760,        // 超过此大小自动压缩（官方 resizeImage）
   "cacheDir": "/tmp/pi-vision-tool-cache", // 分析图片的持久化缓存目录

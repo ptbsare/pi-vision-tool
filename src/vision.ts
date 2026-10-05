@@ -95,9 +95,11 @@ export async function describeWithPipeline(
    */
   const STREAM_ERROR_RE =
     /Stream ended without finish_reason|Unexpected end of stream|ECONNRESET|ETIMEDOUT|EPIPE|socket hang up|fetch failed|terminated|incomplete response/i;
-  const extraRetries = typeof cfg.streamRetries === "number" && cfg.streamRetries >= 0
-    ? cfg.streamRetries
-    : Math.max(1, cfg.maxRetries || 1); // default: same budget as pi's own retry
+  // maxRetries covers both pi's HTTP-error retry (inside complete()) and our
+  // stream-interruption retry here. The two are orthogonal: STREAM_ERROR_RE
+  // only matches plain Errors without HTTP status, so HTTP retries are never
+  // double-counted.
+  const extraRetries = Math.max(0, cfg.maxRetries);
 
   const attempt = async (): Promise<AssistantMessage> => {
     const effectiveSignal = withTimeoutSignal(signal, timeoutSeconds * 1000);
